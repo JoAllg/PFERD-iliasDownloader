@@ -25,6 +25,14 @@ GROUP.add_argument(
 )
 
 GROUP.add_argument(
+    "--login-type",
+    type=str,
+    choices=["local", "shibboleth"],
+    metavar="LOGIN_TYPE",
+    help="how to log in: local or shibboleth",
+)
+
+GROUP.add_argument(
     "--client-id",
     type=str,
     metavar="CLIENT_ID",
@@ -44,6 +52,8 @@ def load(args: argparse.Namespace, parser: configparser.ConfigParser) -> None:
     section["type"] = COMMAND_NAME
     if args.base_url is not None:
         section["base_url"] = args.base_url
+    if args.login_type is not None:
+        section["login_type"] = args.login_type
     if args.client_id is not None:
         section["client_id"] = args.client_id
 
