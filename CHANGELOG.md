@@ -22,6 +22,12 @@ ambiguous situations.
 
 ## Unreleased
 
+### Added
+- `--login-type` option for the `ilias-web` command
+
+### Fixed
+- `ilias-web` command failing with a missing `login_type`
+
 ## 3.9.4 - 2026-08-31
 
 ### Fixed
