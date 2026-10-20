@@ -22,6 +22,9 @@ ambiguous situations.
 
 ## Unreleased
 
+### Fixed
+- Shibboleth login looping forever on wrong credentials or unknown IdP pages
+
 ## 3.9.4 - 2026-08-31
 
 ### Fixed
