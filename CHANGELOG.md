@@ -22,6 +22,9 @@ ambiguous situations.
 
 ## Unreleased
 
+### Added
+- Shibboleth login for Uni Freiburg (`mylogin.ub.uni-freiburg.de`) in the `ilias-web` crawler
+
 ## 3.9.4 - 2026-08-31
 
 ### Fixed
