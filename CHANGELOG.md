@@ -23,13 +23,12 @@ ambiguous situations.
 ## Unreleased
 
 ### Added
-- `--login-type` option for the `ilias-web` command
 - Shibboleth login for Uni Freiburg (`mylogin.ub.uni-freiburg.de`) in the `ilias-web` crawler
 - Support for the InteractiveVideo plugin (`xvid`), including subtitles. Videos
   are only downloaded if `videos` is enabled.
 
 ### Fixed
-- `ilias-web` command failing with a missing `login_type`
+- `ilias-web` command failing because `login_type` could not be set (new `--login-type` option)
 - Shibboleth login looping forever on wrong credentials or unknown IdP pages
 
 ## 3.9.4 - 2026-08-31
