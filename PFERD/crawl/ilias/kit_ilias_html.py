@@ -4,8 +4,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Optional, cast
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
@@ -1087,20 +1088,20 @@ class IliasPage:
             log.explain(f"Found external video at {url}, ignoring")
             return []
 
-        title = unquote(urlparse(url).path.rsplit("/", 1)[-1])
-        videos = [IliasPageElement.create_new(IliasElementType.MOB_VIDEO, url, title)]
+        # Named after the object title, like opencast videos
+        suffix = PurePosixPath(urlparse(url).path).suffix or ".mp4"
+        videos = [IliasPageElement.create_new(IliasElementType.MOB_VIDEO, url, self._source_name + suffix)]
 
         # Subtitles (always .vtt) are only listed in the player config as a single line:
         # tracks: [[{"label": "..", "src": "./data/<client>/xvid/xvid_<id>/subtitles/..", "srclang": ".."}]],
         if match := re.search(r"^\s*tracks:\s*(\[.*\]),\s*$", str(self._soup), re.MULTILINE):
-            stem = title.rsplit(".", 1)[0]
             for track in json.loads(match.group(1))[0]:
                 lang = f".{track['srclang']}" if track.get("srclang") else ""
                 videos.append(
                     IliasPageElement.create_new(
                         IliasElementType.MOB_VIDEO,
                         self._abs_url_from_relative(track["src"]),
-                        f"{stem}{lang}.vtt",
+                        f"{self._source_name}{lang}.vtt",
                     )
                 )
 
