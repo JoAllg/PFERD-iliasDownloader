@@ -116,6 +116,7 @@ _DIRECTORY_PAGES: set[IliasElementType] = {
     IliasElementType.EXERCISE_OVERVIEW,
     IliasElementType.FOLDER,
     IliasElementType.INFO_TAB,
+    IliasElementType.INTERACTIVE_VIDEO,
     IliasElementType.MEDIACAST_VIDEO_FOLDER,
     IliasElementType.MEETING,
     IliasElementType.OPENCAST_VIDEO_FOLDER,
@@ -123,6 +124,7 @@ _DIRECTORY_PAGES: set[IliasElementType] = {
 }
 
 _VIDEO_ELEMENTS: set[IliasElementType] = {
+    IliasElementType.INTERACTIVE_VIDEO,
     IliasElementType.MEDIACAST_VIDEO,
     IliasElementType.MEDIACAST_VIDEO_FOLDER,
     IliasElementType.OPENCAST_VIDEO,
