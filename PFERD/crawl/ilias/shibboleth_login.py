@@ -155,8 +155,11 @@ def _form_inputs(form: Tag) -> dict[str, str]:
 
 
 def _login_error(soup: BeautifulSoup) -> str:
-    # Standard Shibboleth IdP and Yii (Uni Freiburg) error elements
-    error = soup.select_one(".output--failure, .form-error, .login-form-error, .errorSummary, .errorMessage")
+    # Standard Shibboleth IdP, Yii (Uni Freiburg) and KIT error elements
+    error = soup.select_one(
+        ".output--failure, .form-error, .login-form-error, .errorSummary, .errorMessage,"
+        ' .KIT_section[style*="color: red"]'
+    )
     if error and (text := error.get_text(" ", strip=True)):
         return text
     return "Login form returned, credentials were likely rejected"
