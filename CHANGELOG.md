@@ -25,17 +25,17 @@ ambiguous situations.
 ### Added
 - Shibboleth login for Uni Freiburg (`mylogin.ub.uni-freiburg.de`) in the `ilias-web` crawler
 - Support for the InteractiveVideo plugin (`xvid`), including subtitles. Videos
-  are only downloaded if `videos` is enabled.
+  and subtitles are only downloaded if `videos` is enabled.
 - `no-delete-backup` conflict resolution strategy
 - `--login-type` option for the `ilias-web` command
-
-### Fixed
-- `ilias-web` command failing without a config file, because `login_type`
-  could not be set
 
 ### Changed
 - Shibboleth login now logs the IdP's error message on wrong credentials, only
   asks for a new token on a wrong 2FA token and fails on unknown IdP pages
+
+### Fixed
+- `ilias-web` command failing without a config file, because `login_type`
+  could not be set
 
 ## 3.9.4 - 2026-08-31
 
