@@ -27,10 +27,11 @@ ambiguous situations.
 - Support for the InteractiveVideo plugin (`xvid`), including subtitles. Videos
   are only downloaded if `videos` is enabled.
 - `no-delete-backup` conflict resolution strategy
+- `--login-type` option for the `ilias-web` command
 
 ### Fixed
-- `ilias-web` command failing because `login_type` could not be set (new `--login-type` option)
-- Shibboleth login looping forever on wrong credentials or unknown IdP pages
+- `ilias-web` command failing without a config file, because `login_type`
+  could not be set
 
 ## 3.9.4 - 2026-08-31
 
