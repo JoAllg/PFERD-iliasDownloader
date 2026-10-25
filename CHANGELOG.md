@@ -36,6 +36,8 @@ ambiguous situations.
 ### Fixed
 - `ilias-web` command failing without a config file, because `login_type`
   could not be set
+- Simple authenticator not asking again for typed-in credentials after a failed
+  login
 
 ## 3.9.4 - 2026-08-31
 
