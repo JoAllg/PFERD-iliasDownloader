@@ -22,6 +22,10 @@ ambiguous situations.
 
 ## Unreleased
 
+### Fixed
+- Simple authenticator not asking again for typed-in credentials after a failed
+  login
+
 ## 3.9.4 - 2026-08-31
 
 ### Fixed
