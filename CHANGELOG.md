@@ -33,6 +33,10 @@ ambiguous situations.
 - `ilias-web` command failing without a config file, because `login_type`
   could not be set
 
+### Changed
+- Shibboleth login now logs the IdP's error message on wrong credentials, only
+  asks for a new token on a wrong 2FA token and fails on unknown IdP pages
+
 ## 3.9.4 - 2026-08-31
 
 ### Fixed
