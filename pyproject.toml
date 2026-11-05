@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "PFERD"
 description = "Programm zum Flotten Einfachen Runterladen von Dateien"
-version = "3.9.4"
+version = "3.10.1"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -55,6 +55,21 @@ ignore = [
 [dependency-groups]
 dev = [
     "pyinstaller>=6.16.0",
-    "pyright>=1.1.406",
+    "pyrefly>=1.4.0",
+    "pytest>=9.1.1",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.14.1",
+    "syrupy>=6.1.1",
+]
+
+[tool.pyrefly]
+project-includes = ["PFERD", "pferd.py"]
+python-version = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The e2e tests mostly wait for ILIAS, so run them in parallel. Only tested with up to 8 workers.
+addopts = ["-n", "auto", "--maxprocesses", "8"]
+markers = [
+    "e2e: end-to-end tests against a local ILIAS instance in docker (deselect with '-m \"not e2e\"')",
 ]

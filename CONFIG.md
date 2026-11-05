@@ -32,6 +32,12 @@ default values for the other sections.
 - `share_cookies`: Whether crawlers should share cookies where applicable. For
   example, some crawlers share cookies if they crawl the same website using the
   same account. (Default: `yes`)
+- `check_for_updates`: Whether PFERD should tell you about new releases after
+  running. It asks GitHub at most once a day and remembers the answer in
+  `$XDG_CACHE_HOME/PFERD` (usually `~/.cache/PFERD`), or in
+  `%LOCALAPPDATA%\PFERD` on Windows. Setting the environment variable
+  `PFERD_NO_UPDATE_CHECK` to any non-empty value disables the check regardless
+  of this option. (Default: `yes`)
 
 ## The `crawl:*` sections
 
@@ -171,6 +177,21 @@ requests is likely a good idea.
 - `link_regex`: A regex that is matched against the `href` part of links. If it
   matches, the given link is downloaded as a file. This is used to extract
   files from KIT-IPD pages. (Default: `^.*?[^/]+\.(pdf|zip|c|cpp|java)$`)
+- `auth`: Name of auth section to use for basic authentication. (Optional)
+
+### The `lfcps` crawler
+
+This crawler crawls the schedule page of the Logical Foundations of
+Cyber-Physical Systems course (and other courses on https://lfcps.org/course/).
+Slides, code and exercise sheets from the schedule table are sorted into the
+folders `Slides`, `Code` and `Exercises`. Other files located next to the
+schedule page (e.g. the syllabus) are put into the root folder.
+
+- `target`: URL to the schedule page. (Default:
+  `https://lfcps.org/course/lfcps-schedule.html`)
+- `link_regex`: A regex that is matched against the absolute URL of links. If it
+  matches, the given link is downloaded as a file. (Default:
+  `^.*?[^/]+\.(pdf|kyx|zip)$`)
 - `auth`: Name of auth section to use for basic authentication. (Optional)
 
 ### The `ilias-web` crawler

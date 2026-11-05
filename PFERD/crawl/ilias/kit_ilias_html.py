@@ -1,11 +1,13 @@
+import base64
+import binascii
 import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import Enum
-from pathlib import PurePosixPath
-from typing import Optional, cast
+from pathlib import PurePath, PurePosixPath
+from typing import Literal, Optional, cast
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
@@ -107,6 +109,7 @@ class IliasElementType(Enum):
     FOLDER = "folder"
     FORUM = "forum"
     FORUM_THREAD = "forum_thread"
+    H5P_VIDEO = "h5p_video"
     INFO_TAB = "info_tab"
     INDIVIDUAL_ASSESSMENT = "individual_assessment"
     INTERACTIVE_VIDEO_PLAYER = "interactive_video_player"  # InteractiveVideo plugin (xvid)
@@ -187,6 +190,8 @@ class IliasElementType(Enum):
                     TypeMatcher.img_src("_frm.svg"),
                 )
             case IliasElementType.FORUM_THREAD:
+                return TypeMatcher.never()
+            case IliasElementType.H5P_VIDEO:
                 return TypeMatcher.never()
             case IliasElementType.INFO_TAB:
                 return TypeMatcher.never()
@@ -289,6 +294,7 @@ class IliasPageElement:
             r"fold/(?P<id>\d+)",  # folder
             r"frm/(?P<id>\d+)",  # forum
             r"grp/(?P<id>\d+)",  # group
+            r"h5p/content/(?P<id>\d+)",  # h5p content
             r"lm/(?P<id>\d+)",  # learning module
             r"mcst/(?P<id>\d+)",  # mediacast
             r"pg/(?P<id>(\d|_)+)",  # page?
@@ -300,6 +306,7 @@ class IliasPageElement:
             r"ref_id=(?P<id>\d+)",
             r"target=[a-z]+_(?P<id>\d+)",
             r"mm_(?P<id>\d+)",
+            r"deliver\.php/(?P<id>[A-Za-z0-9_-]+)/",  # media delivered with an access token
             r"xvid_(?P<id>\d+)",  # interactive video subtitles
         ]
 
@@ -500,19 +507,24 @@ class IliasPage:
         )
 
     def _find_learning_module_next(self) -> Optional[str]:
-        for link in self._soup.select("a.ilc_page_rnavlink_RightNavigationLink"):
-            url = self._abs_url_from_link(link)
-            if "baseClass=ilLMPresentationGUI" not in url:
-                continue
-            return url
-        return None
+        return self._find_learning_module_navigation("a.ilc_page_rnavlink_RightNavigationLink", "right")
 
     def _find_learning_module_prev(self) -> Optional[str]:
-        for link in self._soup.select("a.ilc_page_lnavlink_LeftNavigationLink"):
-            url = self._abs_url_from_link(link)
-            if "baseClass=ilLMPresentationGUI" not in url:
-                continue
-            return url
+        return self._find_learning_module_navigation("a.ilc_page_lnavlink_LeftNavigationLink", "left")
+
+    def _find_learning_module_navigation(
+        self, link_selector: str, direction: Literal["left", "right"]
+    ) -> Optional[str]:
+        urls = [self._abs_url_from_link(link) for link in self._soup.select(link_selector)]
+        # ILIAS 10 navigates with chevron buttons in the toolbar
+        for icon in self._soup.select(
+            f"button[data-action]:not([disabled]) > span.glyphicon-chevron-{direction}"
+        ):
+            urls.append(self._abs_url_from_relative(cast(str, cast(Tag, icon.parent).attrs["data-action"])))
+
+        for url in urls:
+            if "baseclass=illmpresentationgui" in url.lower():
+                return url
         return None
 
     def get_forum_export_url(self) -> Optional[str]:
@@ -591,7 +603,8 @@ class IliasPage:
 
     def _is_learning_module_page(self) -> bool:
         if link := self.get_permalink():
-            return "target=pg_" in link
+            # ILIAS 10 permalinks look like goto.php/pg/3_156
+            return "target=pg_" in link or "/goto.php/pg/" in link
         return False
 
     def _contains_collapsed_future_meetings(self) -> bool:
@@ -747,7 +760,8 @@ class IliasPage:
 
         for link in links:
             url = self._abs_url_from_link(link)
-            name = re.sub(r"\([\d,.]+ [MK]B\)", "", link.get_text()).strip().replace("\t", "")
+            # The link text ends with the file size, like "(6 B)" or "(1,5 MB)"
+            name = re.sub(r"\([\d,.]+ [KMGT]?B\)", "", link.get_text()).strip().replace("\t", "")
             name = sanitize_path_name(name)
 
             if "file_id" not in url:
@@ -795,6 +809,8 @@ class IliasPage:
         )
         # For kit-library videos
         video_links += cast(list[Tag], self._soup.select(".c-entity__primary-identifier > a"))
+        # Opencast title links match both selectors, so deduplicate them
+        video_links = list({id(link): link for link in video_links}.values())
 
         results: list[IliasPageElement] = []
 
@@ -1005,6 +1021,7 @@ class IliasPage:
         result += self._find_cards()
         result += self._find_mediacast_videos()
         result += self._find_mob_videos()
+        result += self._find_h5p_videos()
 
         return result
 
@@ -1075,6 +1092,76 @@ class IliasPage:
 
         return videos
 
+    def _find_h5p_videos(self) -> list[IliasPageElement]:
+        """
+        Finds interactive videos of the H5P plugin. The page initializes each of them with a call like
+        il.H5P.initContent('<element id>', <content id>, `<base64 json>`, `<base64 json parameters>`, ...).
+        The parameters list the video files, which are stored in the H5P content directory.
+        """
+        videos: list[IliasPageElement] = []
+        seen_content_ids: set[str] = set()
+        content_url: Optional[str] = None
+
+        regex = re.compile(
+            r"il\.H5P\.initContent\(\s*'(?P<element>[^']+)',\s*(?P<content_id>\d+),"
+            r"\s*`(?P<content>[A-Za-z0-9+/=]*)`,\s*`(?P<parameters>[A-Za-z0-9+/=]*)`"
+        )
+        for script in cast(list[Tag], self._soup.find_all("script")):
+            for match in regex.finditer(script.text):
+                content_id = match.group("content_id")
+                # Every content is initialized twice
+                if content_id in seen_content_ids:
+                    continue
+                seen_content_ids.add(content_id)
+
+                try:
+                    content = json.loads(base64.b64decode(match.group("content")))
+                    parameters = json.loads(base64.b64decode(match.group("parameters")))
+                except (binascii.Error, ValueError) as e:
+                    _unexpected_html_warning()
+                    log.warn_contd(f"Could not decode H5P content {content_id}: {e}")
+                    continue
+
+                library = str(content.get("library", ""))
+                if not library.startswith("H5P.InteractiveVideo "):
+                    log.explain(f"Ignoring H5P content {content_id} of type {library!r}")
+                    continue
+
+                files = parameters.get("interactiveVideo", {}).get("video", {}).get("files") or []
+                # WebM is usually smaller than the alternatives
+                file = next((f for f in files if f.get("mime") == "video/webm"), files[0] if files else None)
+                if file is None:
+                    log.explain(f"H5P video {content_id} has no files")
+                    continue
+                path = str(file["path"])
+                if urlparse(path).scheme:
+                    log.explain(f"Found external H5P video at {path}, ignoring")
+                    continue
+
+                if content_url is None:
+                    content_url = self._find_h5p_content_url()
+                if content_url is None:
+                    _unexpected_html_warning()
+                    log.warn_contd("Found H5P videos, but not the H5P content directory")
+                    return videos
+
+                title = content.get("metadata", {}).get("title") or content.get("title") or content_id
+                name = sanitize_path_name(title) + PurePath(path).suffix
+                if element := self._soup.find(id=match.group("element")):
+                    name = "/".join([*IliasPage._find_upwards_folder_hierarchy(element), name])
+
+                log.explain(f"Found H5P video {name!r}")
+                videos.append(
+                    IliasPageElement.create_new(
+                        typ=IliasElementType.H5P_VIDEO,
+                        url=f"{content_url}/content/{content_id}/{path}",
+                        name=name,
+                        skip_sanitize=True,
+                    )
+                )
+
+        return videos
+
     def _find_interactive_videos(self) -> list[IliasPageElement]:
         # Media object and simple URL sources render <video><source src=...>, YouTube and
         # third party sources render their own player. The source type is not always video/mp4.
@@ -1113,6 +1200,30 @@ class IliasPage:
                 )
 
         return videos
+
+    def _find_h5p_content_url(self) -> Optional[str]:
+        """
+        The H5P plugin configures itself with a "H5PIntegration" object, which a data URL script defines
+        as JSON.parse(... atob(`<base64 json>`) ...).
+        """
+        for script in cast(list[Tag], self._soup.find_all("script")):
+            text = script.text
+            src = cast(str, script.get("src", ""))
+            if (data := src.removeprefix("data:application/javascript;base64,")) != src:
+                try:
+                    text = base64.b64decode(data).decode()
+                except (binascii.Error, UnicodeDecodeError):
+                    continue
+            if "H5PIntegration" not in text:
+                continue
+            if match := re.search(r"atob\(`(?P<integration>[A-Za-z0-9+/=]+)`\)", text):
+                try:
+                    integration = json.loads(base64.b64decode(match.group("integration")))
+                except (binascii.Error, ValueError):
+                    continue
+                if url := integration.get("url"):
+                    return str(url).rstrip("/")
+        return None
 
     def _find_mob_video_url_title(self, video_element: Tag, figure: Tag) -> tuple[Optional[str], str]:
         url = None
@@ -1170,11 +1281,6 @@ class IliasPage:
         """
         found_titles = []
 
-        if None == "hey":
-            pass
-
-        outer_accordion_content: Optional[Tag] = None
-
         parents: list[Tag] = list(tag.parents)
         for parent in parents:
             if not parent.get("class"):
@@ -1196,28 +1302,24 @@ class IliasPage:
                     continue
                 prev = cast(Tag, parent.find_previous_sibling("div"))
                 if "ilContainerBlockHeader" in cast(str, prev.get("class")):
-                    if prev.find("h3"):
-                        found_titles.append(cast(Tag, prev.find("h3")).get_text().strip())
-                    else:
-                        found_titles.append(cast(Tag, prev.find("h2")).get_text().strip())
+                    heading = cast(Tag, prev.find("h3") or prev.find("h2"))
+                    # Groups without a title have a heading like "Leerer Titel" only for screen readers
+                    if "sr-only" not in heading.get_attribute_list("class"):
+                        found_titles.append(heading.get_text().strip())
 
-            # And this for real accordions
+            # And this for real accordions, which may be nested
             if "il_VAccordionContentDef" in cast(str, parent.get("class")):
-                outer_accordion_content = parent
-                break
-
-        if outer_accordion_content:
-            accordion_tag = cast(Tag, outer_accordion_content.parent)
-            head_tag = cast(
-                Tag,
-                accordion_tag.find(
-                    attrs={
-                        "class": lambda x: x is not None
-                        and ("ilc_va_ihead_VAccordIHead" in x or "ilc_va_ihead_AccordIHead" in x)
-                    }
-                ),
-            )
-            found_titles.append(head_tag.get_text().strip())
+                accordion_tag = cast(Tag, parent.parent)
+                head_tag = cast(
+                    Tag,
+                    accordion_tag.find(
+                        attrs={
+                            "class": lambda x: x is not None
+                            and ("ilc_va_ihead_VAccordIHead" in x or "ilc_va_ihead_AccordIHead" in x)
+                        }
+                    ),
+                )
+                found_titles.append(head_tag.get_text().strip())
 
         return [sanitize_path_name(x) for x in reversed(found_titles)]
 
@@ -1422,6 +1524,10 @@ class IliasPage:
     @staticmethod
     def is_logged_in(ilias_soup: IliasSoup) -> bool:
         soup = ilias_soup.soup
+        # The login page itself. Stock ILIAS has no login link in its metabar there.
+        if soup.find("form", attrs={"name": "login_form"}):
+            return False
+
         # Normal ILIAS pages
         mainbar = soup.find(class_="il-maincontrols-metabar")
         if mainbar is not None:

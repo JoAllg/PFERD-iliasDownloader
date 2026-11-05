@@ -1,9 +1,11 @@
 import asyncio
 import base64
+import json
 import os
 import re
 from collections.abc import Awaitable, Coroutine
-from pathlib import PurePath
+from datetime import datetime
+from pathlib import Path, PurePath
 from typing import Any, Literal, Optional, cast
 from urllib.parse import urljoin
 
@@ -15,7 +17,14 @@ from ...auth import Authenticator
 from ...config import Config
 from ...logging import ProgressBar, log
 from ...output_dir import FileSink, Redownload
-from ...utils import fmt_path, sanitize_path_name, soupify, url_set_query_param
+from ...utils import (
+    fmt_path,
+    fmt_real_path,
+    is_whole_file,
+    sanitize_path_name,
+    soupify,
+    url_set_query_param,
+)
 from .. import kit_media_portal
 from ..crawler import CrawlError, CrawlToken, CrawlWarning, DownloadToken, anoncritical
 from ..http_crawler import HttpCrawler, HttpCrawlerSection
@@ -109,6 +118,12 @@ class IliasWebCrawlerSection(HttpCrawlerSection):
     def forums(self) -> bool:
         return self.s.getboolean("forums", fallback=False)
 
+    def dump_pages(self) -> Optional[Path]:
+        value = self.s.get("dump_pages")
+        if value is None:
+            return None
+        return Path(value).expanduser()
+
 
 _DIRECTORY_PAGES: set[IliasElementType] = {
     IliasElementType.EXERCISE,
@@ -123,9 +138,11 @@ _DIRECTORY_PAGES: set[IliasElementType] = {
 }
 
 _VIDEO_ELEMENTS: set[IliasElementType] = {
+    IliasElementType.H5P_VIDEO,
     IliasElementType.INTERACTIVE_VIDEO_PLAYER,
     IliasElementType.MEDIACAST_VIDEO,
     IliasElementType.MEDIACAST_VIDEO_FOLDER,
+    IliasElementType.MOB_VIDEO,
     IliasElementType.OPENCAST_VIDEO,
     IliasElementType.OPENCAST_VIDEO_FOLDER,
     IliasElementType.OPENCAST_VIDEO_FOLDER_MAYBE_PAGINATED,
@@ -203,6 +220,14 @@ instance's greatest bottleneck.
         self._videos = section.videos()
         self._forums = section.forums()
         self._visited_urls: dict[str, PurePath] = dict()
+
+        self._dump_dir: Optional[Path] = None
+        if dump_pages := section.dump_pages():
+            # One directory per crawler and run, so neither overwrites the pages of another
+            crawler_dir = sanitize_path_name(name.removeprefix("crawl:"))
+            run_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self._dump_dir = config.default_section.working_dir() / dump_pages / crawler_dir / run_dir
+        self._dumped_pages = 0
 
     async def _run(self) -> None:
         if isinstance(self._target, int):
@@ -500,6 +525,8 @@ instance's greatest bottleneck.
         elif element.type == IliasElementType.INTERACTIVE_VIDEO_PLAYER:
             return await self._handle_interactive_video(element, element_path)
         elif element.type == IliasElementType.MOB_VIDEO:
+            return await self._handle_file(element, element_path, is_video=True)
+        elif element.type == IliasElementType.H5P_VIDEO:
             return await self._handle_file(element, element_path, is_video=True)
         elif element.type == IliasElementType.KIT_MEDIA_PORTAL_VIDEO_PLAYER:
             return await self._handle_kit_media_portal_video(element, element_path)
@@ -861,27 +888,35 @@ instance's greatest bottleneck.
             return await fetch_follow_redirects(next_url)
 
         async def fetch_follow_redirects(file_url: str) -> bool:
+            # Some servers (like the KIT ILIAS) drop the content length of files, but keep the
+            # content range. Request the whole file as a range to learn its size.
+            async with self.session.get(file_url, headers={hdrs.RANGE: "bytes=0-"}) as resp:
+                if is_whole_file(resp):
+                    return await stream_response(resp)
             async with self.session.get(file_url) as resp:
-                # We wanted a video but got HTML => Forbidden, auth expired. Logging in won't really
-                # solve that depending on the setup, but it is better than nothing.
-                if is_video and "html" in resp.content_type:
-                    return False
+                return await stream_response(resp)
 
-                # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
-                if content_range := resp.headers.get(hdrs.CONTENT_RANGE, default=None):
-                    parts = content_range.split("/")
-                    if len(parts) == 2 and parts[1].isdigit():
-                        bar.set_total(int(parts[1]))
+        async def stream_response(resp: aiohttp.ClientResponse) -> bool:
+            # We wanted a video but got HTML => Forbidden, auth expired. Logging in won't really
+            # solve that depending on the setup, but it is better than nothing.
+            if is_video and "html" in resp.content_type:
+                return False
 
-                # Prefer the content length header
-                if resp.content_length:
-                    bar.set_total(resp.content_length)
+            # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Range
+            if content_range := resp.headers.get(hdrs.CONTENT_RANGE, default=None):
+                parts = content_range.split("/")
+                if len(parts) == 2 and parts[1].isdigit():
+                    bar.set_total(int(parts[1]))
 
-                async for data in resp.content.iter_chunked(1024):
-                    sink.file.write(data)
-                    bar.advance(len(data))
+            # Prefer the content length header
+            if resp.content_length:
+                bar.set_total(resp.content_length)
 
-                sink.done()
+            async for data in resp.content.iter_chunked(1024):
+                sink.file.write(data)
+                bar.advance(len(data))
+
+            sink.done()
             return True
 
         auth_id = await self._current_auth_id()
@@ -1000,15 +1035,23 @@ instance's greatest bottleneck.
             return elements
 
         next_element_url: Optional[str] = start_url
+        visited_urls: set[str] = set()
         counter = 0
         while next_element_url:
+            if next_element_url in visited_urls:
+                log.explain(f"Already visited {next_element_url}, stopping")
+                break
+            visited_urls.add(next_element_url)
             log.explain_topic(f"Parsing HTML page for {fmt_path(path)} ({dir}-{counter})")
             log.explain(f"URL: {next_element_url}")
             soup = await self._get_page(next_element_url)
             page = IliasPage(soup, parent_element)
-            if next := page.get_learning_module_data():
-                elements.append(next)
-                next_element_url = next.previous_url if dir == "left" else next.next_url
+            next = page.get_learning_module_data()
+            if not next:
+                log.explain("Not a learning module page, stopping")
+                break
+            elements.append(next)
+            next_element_url = next.previous_url if dir == "left" else next.next_url
             counter += 1
 
         return elements
@@ -1078,8 +1121,10 @@ instance's greatest bottleneck.
     async def _get_page(self, url: str, root_page_allowed: bool = False) -> IliasSoup:
         auth_id = await self._current_auth_id()
         async with self.session.get(url) as request:
-            soup = IliasSoup(soupify(await request.read()), str(request.url))
+            data = await request.read()
+            soup = IliasSoup(soupify(data), str(request.url))
             if IliasPage.is_logged_in(soup):
+                self._dump_page(url, str(request.url), data)
                 return self._verify_page(soup, url, root_page_allowed)
 
         # We weren't authenticated, so try to do that
@@ -1087,10 +1132,28 @@ instance's greatest bottleneck.
 
         # Retry once after authenticating. If this fails, we will die.
         async with self.session.get(url) as request:
-            soup = IliasSoup(soupify(await request.read()), str(request.url))
+            data = await request.read()
+            soup = IliasSoup(soupify(data), str(request.url))
             if IliasPage.is_logged_in(soup):
+                self._dump_page(url, str(request.url), data)
                 return self._verify_page(soup, url, root_page_allowed)
         raise CrawlError(f"get_page failed even after authenticating on {url!r}")
+
+    def _dump_page(self, url: str, final_url: str, data: bytes) -> None:
+        """
+        Saves a crawled page for debugging, if the dump_pages option is set. The pages are numbered in
+        the order they were crawled and index.jsonl maps their numbers to their URLs.
+        """
+        if self._dump_dir is None:
+            return
+
+        self._dumped_pages += 1
+        name = f"{self._dumped_pages:04}.html"
+        self._dump_dir.mkdir(parents=True, exist_ok=True)
+        (self._dump_dir / name).write_bytes(data)
+        with open(self._dump_dir / "index.jsonl", "a", encoding="utf-8") as index:
+            index.write(json.dumps({"file": name, "url": url, "final_url": final_url}) + "\n")
+        log.explain(f"Dumped page {url!r} to {fmt_real_path(self._dump_dir / name)}")
 
     @staticmethod
     def _verify_page(soup: IliasSoup, url: str, root_page_allowed: bool) -> IliasSoup:
@@ -1126,29 +1189,34 @@ instance's greatest bottleneck.
         if self._login_type == "shibboleth":
             await self._shibboleth_login.login(self.session)
         else:
-            params = {
-                "client_id": self._client_id,
-                "cmd": "force_login",
-            }
-            async with self.session.get(urljoin(self._base_url, "/login.php"), params=params) as request:
-                login_page = soupify(await request.read())
+            while True:
+                params = {
+                    "client_id": self._client_id,
+                    "cmd": "force_login",
+                }
+                async with self.session.get(urljoin(self._base_url, "/login.php"), params=params) as request:
+                    login_page = soupify(await request.read())
 
-            login_form = login_page.find("form", attrs={"name": "login_form"})
-            if login_form is None:
-                raise CrawlError("Could not find the login form! Specified client id might be invalid.")
+                login_form = login_page.find("form", attrs={"name": "login_form"})
+                if login_form is None:
+                    raise CrawlError("Could not find the login form! Specified client id might be invalid.")
 
-            login_url = cast(Optional[str], login_form.attrs.get("action"))
-            if login_url is None:
-                raise CrawlError("Could not find the action URL in the login form!")
+                login_url = cast(Optional[str], login_form.attrs.get("action"))
+                if login_url is None:
+                    raise CrawlError("Could not find the action URL in the login form!")
 
-            username, password = await self._auth.credentials()
+                username, password = await self._auth.credentials()
 
-            login_form_data = aiohttp.FormData()
-            login_form_data.add_field("login_form/input_3/input_4", username)
-            login_form_data.add_field("login_form/input_3/input_5", password)
+                login_form_data = aiohttp.FormData()
+                login_form_data.add_field("login_form/input_3/input_4", username)
+                login_form_data.add_field("login_form/input_3/input_5", password)
 
-            # do the actual login
-            async with self.session.post(urljoin(self._base_url, login_url), data=login_form_data) as request:
-                soup = IliasSoup(soupify(await request.read()), str(request.url))
-                if not IliasPage.is_logged_in(soup):
-                    self._auth.invalidate_credentials()
+                # do the actual login
+                async with self.session.post(
+                    urljoin(self._base_url, login_url), data=login_form_data
+                ) as request:
+                    soup = IliasSoup(soupify(await request.read()), str(request.url))
+                    if IliasPage.is_logged_in(soup):
+                        return
+
+                self._auth.invalidate_credentials()

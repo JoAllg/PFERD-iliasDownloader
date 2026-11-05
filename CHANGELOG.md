@@ -27,18 +27,43 @@ ambiguous situations.
 - Support for the InteractiveVideo plugin (`xvid`), including subtitles. Videos
   and subtitles are only downloaded if `videos` is enabled.
 - `no-delete-backup` conflict resolution strategy
-- `--login-type` option for the `ilias-web` command
 
 ### Changed
 - Shibboleth login now logs the IdP's error message on wrong credentials, only
   asks for a new token on a wrong 2FA token, fails on unknown IdP pages and
   only sends known form fields
 
+## 3.10.1 - 2026-10-31
+
 ### Fixed
-- `ilias-web` command failing without a config file, because `login_type`
-  could not be set
+- "Found second path to element" warning for every video in KIT ILIAS Opencast listings
+
+## 3.10.0 - 2026-10-25
+
+### Added
+- `--login-type` option for the `ilias-web` command
+- Tell the user about new PFERD releases. Disable with the `check_for_updates` option or the `PFERD_NO_UPDATE_CHECK` environment variable.
+- Download interactive H5P videos (with the `videos` option)
+
+### Changed
+- `kit-ipd` crawler accepts `http://` targets
+- Embedded videos in ILIAS pages are only downloaded with the `videos` option, like all other videos
+
+### Fixed
+- Local ILIAS login returning as if authentication succeeded after recoverable credential failures
 - Simple authenticator not asking again for typed-in credentials after a failed
   login
+- Unknown size of videos in the KIT ILIAS
+- Download progress showing "/ 100 bytes" and not advancing for files of unknown size
+- `ilias-web` command failing without a config file, because `login_type`
+  could not be set
+- `kit-ipd` crawler putting files into the folder of a heading from a previous section
+- "Didn't find identity" warning for embedded videos
+- File sizes in bytes or GB are removed from the names of files in content pages
+- Files in nested accordions are placed in a folder for each accordion, not only the innermost one
+- Exit with status 1 if a crawler failed, for example because of invalid credentials
+- Learning modules in ILIAS 10
+- Item groups without a title no longer become a folder named "Leerer Titel"
 
 ## 3.9.4 - 2026-08-31
 
