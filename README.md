@@ -1,3 +1,4 @@
+This is ny fork of [PFERD](https://github.com/Garmelon/PFERD/). It mainly adds support for ilias.uni-freiburg.de and some features which I required. I try to upstream my changes as pull requests.
 # PFERD
 
 **P**rogramm zum **F**lotten, **E**infachen **R**unterladen von **D**ateien
